@@ -2,7 +2,7 @@
 """find-images: search candidate images, build numbered contact sheets, download picks
 with source/licence records. Keys come from env vars or ~/.config/image-search/keys.env.
 
-  python imgs.py search  --tag s03 --q "比亚迪 海豹 官方图" [--q-en "..."] [--src web,commons,pixabay]
+  python imgs.py search  --tag s03 --q "BYD Seal official photo" [--q-en "..."] [--src web,commons,pixabay]
                          [--orient landscape|portrait|square|any] [--min-side 1000] [--n 12]
   python imgs.py search  --plan plan.json          # batch; items may set "mode": search|icons|site
   python imgs.py site    --tag s04 --url https://www.example.com/product
@@ -11,6 +11,7 @@ with source/licence records. Keys come from env vars or ~/.config/image-search/k
   python imgs.py credits
 All commands take --out DIR (default ./images).
 Icons need Node.js with sharp installed (npm install -g sharp).
+Output language follows the system UI language (Chinese or English); set FIND_IMAGES_LANG=zh|en to override.
 """
 import argparse
 import io
@@ -32,6 +33,35 @@ from urllib3.util.retry import Retry
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
+
+def detect_lang():
+    v = (os.environ.get("FIND_IMAGES_LANG") or "").strip().lower()
+    if v in ("zh", "en"):
+        return v
+    if sys.platform == "win32":   # LANG on Windows is usually unset or set by Git Bash, so ask Windows
+        try:
+            import ctypes
+            return "zh" if (ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF) == 0x04 else "en"
+        except Exception:
+            pass
+    for k in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        if os.environ.get(k):
+            return "zh" if os.environ[k].lower().startswith("zh") else "en"
+    try:
+        import locale
+        loc = (locale.getlocale()[0] or "").lower()
+    except Exception:
+        loc = ""
+    return "zh" if loc.startswith(("zh", "chinese")) else "en"
+
+
+LANG = detect_lang()
+
+
+def t(zh, en):
+    return en if LANG == "en" else zh
+
+
 BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
 # Wikimedia asks API clients for a descriptive User-Agent; set FIND_IMAGES_UA to add your own contact.
@@ -50,7 +80,10 @@ BLOCKED = (
     "pinterest.", "xiaohongshu.com", "xhscdn.com",
 )
 ICON_PREFIXES = "material-symbols,mdi,tabler,lucide,ph,fluent,carbon,ri,heroicons"
-LIC_LABEL = {"free": "可商用", "attribution": "需署名", "official": "官网", "unknown": "版权?", "check": "需核实"}
+LIC_LABEL = t(
+    {"free": "可商用", "attribution": "需署名", "official": "官网", "unknown": "版权?", "check": "需核实"},
+    {"free": "free", "attribution": "credit", "official": "official", "unknown": "rights?", "check": "check"},
+)
 
 
 # ---------------------------------------------------------------- utilities
@@ -152,14 +185,15 @@ def workdir(out, tag):
 def p_web(q, n):
     key = KEYS.get("SERPER_API_KEY")
     if not key:
-        print("  [web] 跳过：没有 SERPER_API_KEY")
+        print(t("  [web] 跳过：没有 SERPER_API_KEY", "  [web] skipped: no SERPER_API_KEY"))
         return []
     body = {"q": q, "num": 20 if n > 6 else 10}   # 20 results = 2 credits, 10 = 1 credit
     if has_cjk(q):
         body.update(gl="cn", hl="zh-cn")
     r = S.post("https://google.serper.dev/images", headers={"X-API-KEY": key}, json=body, timeout=30)
     d = r.json()
-    print(f"  [web] Serper 返回 {len(d.get('images', []))} 条，扣 {d.get('credits')} 次额度")
+    got, cr = len(d.get("images", [])), d.get("credits")
+    print(t(f"  [web] Serper 返回 {got} 条，扣 {cr} 次额度", f"  [web] Serper returned {got}, used {cr} credit(s)"))
     out = []
     for x in d.get("images", []):
         page = x.get("link", "")
@@ -187,7 +221,9 @@ def p_commons(q, n):
         "gsrlimit": min(max(n * 3, 20), 50), "prop": "imageinfo", "iiprop": "url|size|extmetadata",
         "iiurlwidth": 360, "format": "json"})
     pages = sorted(r.json().get("query", {}).get("pages", {}).values(), key=lambda p: p.get("index", 0))
-    print(f"  [commons] 返回 {len(pages)} 条" + ("（Commons 以英文为主，中文查询结果通常很少）" if has_cjk(q) and len(pages) < 5 else ""))
+    hint = has_cjk(q) and len(pages) < 5
+    print(t(f"  [commons] 返回 {len(pages)} 条" + ("（Commons 以英文为主，中文查询结果通常很少）" if hint else ""),
+            f"  [commons] returned {len(pages)}" + (" (Commons is mostly English; use an English query)" if hint else "")))
     out = []
     for p in pages:
         ii = (p.get("imageinfo") or [{}])[0]
@@ -214,14 +250,15 @@ def p_commons(q, n):
 def p_pixabay(q, n, orient):
     key = KEYS.get("PIXABAY_API_KEY")
     if not key:
-        print("  [pixabay] 跳过：没有 PIXABAY_API_KEY")
+        print(t("  [pixabay] 跳过：没有 PIXABAY_API_KEY", "  [pixabay] skipped: no PIXABAY_API_KEY"))
         return []
     o = {"landscape": "horizontal", "portrait": "vertical"}.get(orient, "all")
     r = S.get("https://pixabay.com/api/", timeout=30, params={
         "key": key, "q": q[:100], "lang": "zh" if has_cjk(q) else "en", "image_type": "photo",
         "orientation": o, "per_page": min(max(n * 2, 10), 50), "safesearch": "true"})
     d = r.json()
-    print(f"  [pixabay] 命中 {d.get('totalHits')}，取 {len(d.get('hits', []))} 条")
+    total, got = d.get("totalHits"), len(d.get("hits", []))
+    print(t(f"  [pixabay] 命中 {total}，取 {got} 条", f"  [pixabay] {total} hits, took {got}"))
     out = []
     for x in d.get("hits", []):
         w, h = x["imageWidth"], x["imageHeight"]
@@ -273,9 +310,9 @@ def build_sheet(cands, imgs, path):
             sheet.paste(im, (x + (cell - im.width) // 2, y + 3 + (box_h - im.height) // 2))
         prov = c["provider"]
         if prov == "commons":
-            tail = f"{c['license'] or '授权需核实'} Commons"      # e.g. "CC BY-SA 4.0" stays visible
+            tail = f"{c['license'] or t('授权需核实', 'license?')} Commons"   # e.g. "CC BY-SA 4.0" stays visible
         elif prov == "pixabay":
-            tail = "可商用 Pixabay"
+            tail = f"{LIC_LABEL['free']} Pixabay"
         elif prov == "iconify":
             tail = f"{c['license']} {c['title'].split(':')[0]}"
         else:
@@ -312,11 +349,13 @@ def finalize(cands, n, out, tag, query):
         c["query"] = query
     (wd / "candidates.json").write_text(json.dumps(kept, ensure_ascii=False, indent=1), encoding="utf-8")
     if not kept:
-        print(f"[{tag}] 没有可用候选。换个查询词（更具体 / 换英文 / 换来源）再试。")
+        print(t(f"[{tag}] 没有可用候选。换个查询词（更具体 / 换英文 / 换来源）再试。",
+                f"[{tag}] no usable candidates. Try another query (more specific, other language, other source)."))
         return
     sheet = wd / "sheet.jpg"
     build_sheet(kept, kimgs, sheet)
-    print(f"[{tag}] {len(kept)} 个候选 → 拼板 {sheet.resolve()}")
+    print(t(f"[{tag}] {len(kept)} 个候选 → 拼板 {sheet.resolve()}",
+            f"[{tag}] {len(kept)} candidates → sheet {sheet.resolve()}"))
     for c in kept:
         src = c.get("page_domain") or c["provider"]
         lic = LIC_LABEL.get(c["license_class"], "")
@@ -338,10 +377,11 @@ def interleave(lists):
 def cmd_search(item, out):
     tag, q = item["tag"], item.get("q") or item.get("q_en")
     q_en = item.get("q_en") or q
-    src =[s.strip() for s in item.get("src", "web,commons,pixabay").split(",") if s.strip()]
+    src = [s.strip() for s in item.get("src", "web,commons,pixabay").split(",") if s.strip()]
     orient, n = item.get("orient", "any"), int(item.get("n", 12))
     min_side = int(item.get("min_side", 1000))
-    print(f"[{tag}] 搜索：{q}" + (f" / {q_en}" if q_en != q else "") + f"  来源={','.join(src)}")
+    shown = q + (f" / {q_en}" if q_en != q else "")
+    print(t(f"[{tag}] 搜索：{shown}  来源={','.join(src)}", f"[{tag}] search: {shown}  sources={','.join(src)}"))
     lists = []
     for s in src:
         try:
@@ -352,7 +392,7 @@ def cmd_search(item, out):
             elif s == "pixabay":
                 lists.append(p_pixabay(q if has_cjk(q) else q_en, n, orient))
         except Exception as e:
-            print(f"  [{s}] 出错：{e!r:.120}")
+            print(t(f"  [{s}] 出错：{e!r:.120}", f"  [{s}] error: {e!r:.120}"))
     seen, cands, dropped = set(), [], {"blocked": 0, "small": 0, "orient": 0}
     for c in interleave(lists):
         u = (c["urls"] or [""])[0]
@@ -372,7 +412,9 @@ def cmd_search(item, out):
             dropped["orient"] += 1
             continue
         cands.append(c)
-    print(f"  过滤：水印图库/社交平台 {dropped['blocked']}，尺寸不足 {dropped['small']}，方向不符 {dropped['orient']}")
+    b, sm, o = dropped["blocked"], dropped["small"], dropped["orient"]
+    print(t(f"  过滤：水印图库/社交平台 {b}，尺寸不足 {sm}，方向不符 {o}",
+            f"  dropped: stock/social sites {b}, too small {sm}, wrong orientation {o}"))
     finalize(cands[: int(n * 1.6)], n, out, tag, q)
 
 
@@ -385,17 +427,17 @@ def page_image_urls(url):
     found = []
     for sel, attr in (('meta[property="og:image"]', "content"), ('meta[name="twitter:image"]', "content"),
                       ('link[rel="image_src"]', "href")):
-        for t in soup.select(sel):
-            found.append(str(t.get(attr) or ""))
-    for t in soup.find_all(["img", "source"]):
-        srcset = str(t.get("srcset") or t.get("data-srcset") or "")
+        for tg in soup.select(sel):
+            found.append(str(tg.get(attr) or ""))
+    for tg in soup.find_all(["img", "source"]):
+        srcset = str(tg.get("srcset") or tg.get("data-srcset") or "")
         if srcset:
             parts = [p.strip().split(" ")[0] for p in srcset.split(",") if p.strip()]
             if parts:
                 found.append(parts[-1])
         for a in ("data-src", "data-original", "data-lazy-src", "src"):
-            if t.get(a):
-                found.append(str(t.get(a)))
+            if tg.get(a):
+                found.append(str(tg.get(a)))
                 break
     out, seen = [], set()
     for u in found:
@@ -426,16 +468,21 @@ def exa_image_urls(url):
 def cmd_site(item, out):
     tag, url = item["tag"], item["url"]
     min_side, n = int(item.get("min_side", 600)), int(item.get("n", 12))
-    print(f"[{tag}] 抓取页面图片：{url}")
+    print(t(f"[{tag}] 抓取页面图片：{url}", f"[{tag}] collecting page images: {url}"))
     try:
         urls = page_image_urls(url)
     except Exception as e:
-        print(f"  本地抓取失败：{e!r:.100}")
+        print(t(f"  本地抓取失败：{e!r:.100}", f"  local fetch failed: {e!r:.100}"))
         urls = []
     if len(urls) < 3:
-        print("  本地抓到的图太少，改用 Exa 提取页面图片链接")
-        urls = list(dict.fromkeys(urls + exa_image_urls(url)))
-    print(f"  页面图片链接 {len(urls)} 个，下载测量尺寸……")
+        if KEYS.get("EXA_API_KEY"):
+            print(t("  本地抓到的图太少，改用 Exa 提取页面图片链接",
+                    "  too few images found locally; asking Exa for the page's image links"))
+            urls = list(dict.fromkeys(urls + exa_image_urls(url)))
+        else:
+            print(t("  本地抓到的图太少；配置 EXA_API_KEY 后可以用 Exa 补充",
+                    "  too few images found locally; set EXA_API_KEY to let Exa fill in"))
+    print(t(f"  页面图片链接 {len(urls)} 个，下载测量尺寸……", f"  {len(urls)} image links; downloading to measure…"))
     wd = workdir(out, tag)
 
     def one(iu):
@@ -455,7 +502,8 @@ def cmd_site(item, out):
         local.write_bytes(raw)
         cands.append(dict(provider="site", title=Path(urlparse(iu).path).name[:60], width=im.width,
                           height=im.height, thumb=iu, local=str(local), urls=[iu], page=url,
-                          domain=domain_of(iu), page_domain=domain_of(url), license="官网图片",
+                          domain=domain_of(iu), page_domain=domain_of(url),
+                          license=t("官网图片", "Official site image"),
                           license_class="official", author=domain_of(url)))
     cands.sort(key=lambda c: -c["width"] * c["height"])
     finalize(cands, n, out, tag, url)
@@ -482,12 +530,15 @@ try { sharp = require('sharp'); } catch (e) {
 
 def svg_to_png(svgs):
     if not shutil.which("node"):
-        print("  图标模式需要 Node.js（再执行 npm install -g sharp），本机没找到 node")
+        print(t("  图标模式需要 Node.js（再执行 npm install -g sharp），本机没找到 node",
+                "  icons need Node.js (then run npm install -g sharp); node was not found"))
         return False
     r = subprocess.run(["node", "-e", SVG2PNG_JS, json.dumps([str(p) for p in svgs])],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
-        print(f"  SVG 转 PNG 失败，确认已执行 npm install -g sharp：{r.stderr.strip()[-200:]}")
+        err = r.stderr.strip()[-200:]
+        print(t(f"  SVG 转 PNG 失败，确认已执行 npm install -g sharp：{err}",
+                f"  SVG to PNG failed; make sure you ran npm install -g sharp: {err}"))
         return False
     return True
 
@@ -496,7 +547,8 @@ def cmd_icons(item, out):
     tag, q = item["tag"], item["q"]
     n, color = int(item.get("n", 16)), item.get("color", "#1F2937")
     prefixes = item.get("prefixes", ICON_PREFIXES)
-    print(f"[{tag}] 图标：{q}（Iconify，只支持英文关键词）")
+    print(t(f"[{tag}] 图标：{q}（Iconify，只支持英文关键词）", f"[{tag}] icons: {q} (Iconify, English keywords only)"))
+
     def iconify_search(query):
         return S.get("https://api.iconify.design/search", timeout=30,
                      params={"query": query, "limit": 64, "prefixes": prefixes}).json()
@@ -507,10 +559,11 @@ def cmd_icons(item, out):
             extra = iconify_search(word)
             names += [x for x in extra.get("icons", []) if x not in names]
             cols.update(extra.get("collections", {}))
-        print(f"  原查询结果太少，已追加单词 {q.split()} 的结果")
+        print(t(f"  原查询结果太少，已追加单词 {q.split()} 的结果",
+                f"  too few results; added results for each word {q.split()}"))
     names = names[:n]
     if not names:
-        print(f"[{tag}] 没有匹配的图标，换个英文词试试。")
+        print(t(f"[{tag}] 没有匹配的图标，换个英文词试试。", f"[{tag}] no matching icons; try another English word."))
         return
     wd = workdir(out, tag)
     svgs = []
@@ -522,7 +575,8 @@ def cmd_icons(item, out):
         p.write_text(svg, encoding="utf-8")
         svgs.append(p)
     if not svg_to_png(svgs):
-        print(f"[{tag}] SVG 已保存在 {wd.resolve()}，但没生成拼板。")
+        print(t(f"[{tag}] SVG 已保存在 {wd.resolve()}，但没生成拼板。",
+                f"[{tag}] SVGs saved in {wd.resolve()}, but no sheet was built."))
         return
     cands = []
     for nm, p in zip(names, svgs):
@@ -555,10 +609,12 @@ def save_image(im, dest_noext):
 
 def cmd_pick(tag, ids, out, note=""):
     wd = Path(out) / "_work" / tag
-    if not (wd / "candidates.json").exists():
-        print(f"没有 {wd / 'candidates.json'}：先对 tag {tag} 运行 search（--out 要和 search 时一致）")
+    cj = wd / "candidates.json"
+    if not cj.exists():
+        print(t(f"没有 {cj}：先对 tag {tag} 运行 search（--out 要和 search 时一致）",
+                f"{cj} not found: run search for tag {tag} first (with the same --out)"))
         return
-    cands = {c["id"]: c for c in json.loads((wd / "candidates.json").read_text(encoding="utf-8"))}
+    cands = {c["id"]: c for c in json.loads(cj.read_text(encoding="utf-8"))}
     assets = Path(out) / "assets"
     assets.mkdir(parents=True, exist_ok=True)
     mpath = Path(out) / "manifest.json"
@@ -566,7 +622,7 @@ def cmd_pick(tag, ids, out, note=""):
     for i in ids:
         c = cands.get(i)
         if not c:
-            print(f"  #{i} 不存在")
+            print(t(f"  #{i} 不存在", f"  #{i} does not exist"))
             continue
         im, degraded = None, False
         if c.get("local"):
@@ -586,7 +642,8 @@ def cmd_pick(tag, ids, out, note=""):
                 except Exception:
                     pass
         if im is None:
-            print(f"  #{i} 下载失败（原图和缩略图都拿不到），换一张")
+            print(t(f"  #{i} 下载失败（原图和缩略图都拿不到），换一张",
+                    f"  #{i} download failed (neither original nor thumbnail); pick another"))
             continue
         if max(im.size) < min(1000, 0.6 * max(c["width"], c["height"])):
             degraded = True   # got something much smaller than advertised
@@ -602,17 +659,23 @@ def cmd_pick(tag, ids, out, note=""):
                      license_class=c["license_class"], author=c.get("author", ""), query=c.get("query"),
                      note=note, **extra)
         manifest = [m for m in manifest if not (m["tag"] == tag and m["id"] == i)] + [entry]
-        flag = "（只拿到缩略图，清晰度不够，建议换一张）" if degraded else ""
+        flag = t("（只拿到缩略图，清晰度不够，建议换一张）", " (degraded: only a thumbnail was available; pick another)") \
+            if degraded else ""
         print(f"  #{i} → {path.resolve()}  {size[0]}x{size[1]}  [{LIC_LABEL[c['license_class']]}]{flag}")
     mpath.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"manifest: {mpath.resolve()}（共 {len(manifest)} 张）")
+    print(t(f"manifest: {mpath.resolve()}（共 {len(manifest)} 张）", f"manifest: {mpath.resolve()} ({len(manifest)} images)"))
 
 
 def cmd_credits(out):
     mpath = Path(out) / "manifest.json"
+    if not mpath.exists():
+        print(t(f"没有 {mpath}：先用 pick 下载图片", f"{mpath} not found: download images with pick first"))
+        return
     manifest = json.loads(mpath.read_text(encoding="utf-8"))
-    rows = ["| 文件 | 来源 | 作者 | 授权 | 链接 |", "|---|---|---|---|---|"]
+    rows = [t("| 文件 | 来源 | 作者 | 授权 | 链接 |", "| File | Source | Author | License | Link |"),
+            "|---|---|---|---|---|"]
     short = []
+    sep = t("：", ": ")
     for m in manifest:
         src = {"commons": "Wikimedia Commons", "pixabay": "Pixabay", "iconify": "Iconify"}.get(
             m["provider"], domain_of(m.get("source_page")))
@@ -621,13 +684,19 @@ def cmd_credits(out):
             continue  # permissive icon sets: no per-icon credit needed
         who = f" / {m['author']}" if m.get("author") and m["provider"] in ("commons", "pixabay") else ""
         lic = "" if m["license_class"] in ("unknown", "official") else f" / {m['license']}"
-        short.append(f"- {Path(m['file']).name}：{src}{who}{lic}")
+        short.append(f"- {Path(m['file']).name}{sep}{src}{who}{lic}")
     unknown = [m for m in manifest if m["license_class"] in ("unknown", "official", "check")]
-    text = "# 图片来源\n\n" + "\n".join(rows) + "\n\n## 幻灯片署名（可直接放到致谢/来源页）\n\n" + "\n".join(short) + "\n"
+    text = (t("# 图片来源", "# Image credits") + "\n\n" + "\n".join(rows) + "\n\n"
+            + t("## 幻灯片署名（可直接放到致谢/来源页）", "## Slide credits (paste into the sources slide)")
+            + "\n\n" + "\n".join(short) + "\n")
     if unknown:
-        text += ("\n## 注意\n\n以下图片来自普通网页或官网，版权归原作者，只适合内部汇报、课程作业等非公开用途，"
-                 "且要注明来源；对外发布前请替换成可商用图片或取得授权：\n\n"
-                 + "\n".join(f"- {Path(m['file']).name}（{m.get('source_page')}）" for m in unknown) + "\n")
+        text += ("\n" + t("## 注意", "## Note") + "\n\n"
+                 + t("以下图片来自普通网页或官网，或授权需要核实。版权归原作者，只适合内部汇报、课程作业等非公开用途，"
+                     "且要注明来源；对外发布前请替换成可商用图片或取得授权：",
+                     "The images below come from ordinary web pages or official sites, or their licence needs checking. "
+                     "Copyright stays with the owners: use them only for internal presentations, coursework and other "
+                     "non-public settings, with the source cited, and replace them or get permission before publishing:")
+                 + "\n\n" + "\n".join(f"- {Path(m['file']).name} ({m.get('source_page')})" for m in unknown) + "\n")
     p = Path(out) / "credits.md"
     p.write_text(text, encoding="utf-8")
     print(f"credits: {p.resolve()}")
@@ -646,11 +715,11 @@ def main():
     s.add_argument("--orient", default="any", choices=["any", "landscape", "portrait", "square"])
     s.add_argument("--min-side", dest="min_side", type=int, default=1000)
     s.add_argument("--n", type=int, default=12)
-    t = sub.add_parser("site")
-    t.add_argument("--tag", required=True)
-    t.add_argument("--url", required=True)
-    t.add_argument("--min-side", dest="min_side", type=int, default=600)
-    t.add_argument("--n", type=int, default=12)
+    st = sub.add_parser("site")
+    st.add_argument("--tag", required=True)
+    st.add_argument("--url", required=True)
+    st.add_argument("--min-side", dest="min_side", type=int, default=600)
+    st.add_argument("--n", type=int, default=12)
     i = sub.add_parser("icons")
     i.add_argument("--tag", required=True)
     i.add_argument("--q", required=True)
@@ -662,7 +731,7 @@ def main():
     p.add_argument("--ids", required=True)
     p.add_argument("--note", default="")
     sub.add_parser("credits")
-    for sp in (s, t, i, p, sub.choices["credits"]):
+    for sp in (s, st, i, p, sub.choices["credits"]):
         sp.add_argument("--out", default="images")
     a = ap.parse_args()
 
@@ -673,11 +742,11 @@ def main():
             try:
                 {"search": cmd_search, "site": cmd_site, "icons": cmd_icons}[mode](it, a.out)
             except Exception as e:
-                print(f"[{it.get('tag')}] 出错：{e!r:.200}")
+                print(t(f"[{it.get('tag')}] 出错：{e!r:.200}", f"[{it.get('tag')}] error: {e!r:.200}"))
             print()
     elif a.cmd == "search":
         if not (a.tag and (a.q or a.q_en)):
-            ap.error("search 需要 --tag 和 --q / --q-en（或用 --plan）")
+            ap.error(t("search 需要 --tag 和 --q / --q-en（或用 --plan）", "search needs --tag and --q / --q-en (or --plan)"))
         cmd_search(vars(a), a.out)
     elif a.cmd == "site":
         cmd_site(vars(a), a.out)

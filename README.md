@@ -1,65 +1,68 @@
 # find-images
 
-给 Claude Code、Codex 等 AI Agent 用的找图 skill，用来给 PPT、报告和文档配图。它同时搜几个图源，把候选图拼成一张带编号的拼板让 Agent 挑选，然后下载选中的原图，并记录每张图的来源和授权。
+**English** | [简体中文](README.zh-CN.md)
 
-An agent skill for Claude Code and Codex that finds images for slides and documents. It searches Google Images (via Serper), Wikimedia Commons, Pixabay, a product's own web page and Iconify, shows the candidates on one numbered contact sheet, downloads the picks and records source and licence for each. Instructions and script output are in Chinese.
+An agent skill for Claude Code and Codex that finds images for slides, reports and documents. It searches several image sources at once, puts the candidates on one numbered contact sheet for the agent to choose from, downloads the chosen originals, and records the source and licence of every image.
 
-## 解决什么问题
+Script messages, sheet labels and the generated credits page follow your system language (English or Chinese). A Chinese version of the agent instructions is in [SKILL.zh-CN.md](SKILL.zh-CN.md).
 
-- Claude Code 的 WebSearch 等内置搜索工具只返回文字，搜不到图片。
-- 让 Agent 自己去网页上扒图，常拿到带水印的图库预览图、小缩略图，或者被防盗链挡住；逐张打开候选图来检查，每张图都要占用上下文。
-- 图下载下来以后不知道出处和授权，最后做来源页时补不回来。
+## The problem
 
-## 工作方式
+- Built-in search tools such as Claude Code's WebSearch return text only, no images.
+- When an agent scrapes images from web pages on its own, it often ends up with watermarked stock previews, tiny thumbnails or hotlink-blocked files, and opening candidates one by one to check them fills up the context window.
+- Once an image is downloaded, nobody remembers where it came from or under what licence, and the credits slide can't be written afterwards.
+
+## How it works
 
 ```
-plan.json（每页要什么图）
+plan.json (what each slide needs)
    │
-   ▼  search：几个图源一起搜；去掉水印图库、尺寸不够、方向不对的图，再去重
-_work/<tag>/sheet.jpg（最多 16 张候选，标上编号、尺寸、授权、来源网站）
+   ▼  search: query several sources; drop watermarked stock sites, undersized
+   │          and wrongly oriented images; remove near-duplicates
+_work/<tag>/sheet.jpg (up to 16 candidates, labelled with number, size, licence, source site)
    │
-   ▼  Agent 看这一张拼板，选出编号
-pick：下载原图到 assets/，写入 manifest.json（来源页、作者、协议）
+   ▼  the agent looks at this one sheet and picks numbers
+pick: download originals into assets/, record them in manifest.json (source page, author, licence)
    │
    ▼
-credits：生成 credits.md，直接放进 PPT 的来源页
+credits: write credits.md, ready for the deck's sources slide
 ```
 
-- 一张拼板约 1,600 token，16 张候选只占一张图的上下文。
-- 配三张图以上时，SKILL.md 让主 Agent 把看拼板、选图、下载交给子代理，主 Agent 只读 `manifest.json` 里的文字。
-- 每张图分为四个授权等级：可商用、需署名、官网图片、版权未知。
+- One sheet costs about 1,600 tokens, so 16 candidates take the context of a single image.
+- For three or more images, SKILL.md tells the main agent to hand sheet viewing, choosing and downloading to a subagent; the main agent only reads the text in `manifest.json`.
+- Every image gets one of four licence classes: free to use, attribution required, official site image, unknown rights.
 
-## 图源
+## Sources
 
-| 图源 | 适合找什么 | 授权 | 要不要 key | 费用 |
+| Source | Good for | Licence | Key needed | Cost |
 |---|---|---|---|---|
-| Google 图片（通过 Serper API） | 具体产品、新闻事件、人物、中文内容 | 版权未知 | 要 | 注册送 2,500 次，用完再充值 |
-| Wikimedia Commons | 地标、建筑、历史、科学、机构 | CC0、CC BY、CC BY-SA 等，脚本记下每张图的具体协议 | 不要 | 免费 |
-| Pixabay | 氛围图、办公、城市、自然等通用场景 | Pixabay Content License，可商用，不强制署名 | 要 | 免费 |
-| 官网页面（`site` 模式） | 某个产品或公司的官方图 | 版权归官网 | 不要（解析不到图时可用 Exa 补充） | 免费 |
-| Iconify 图标（`icons` 模式） | 概念配图 | 开源图标集（MIT、Apache 2.0 等） | 不要 | 免费 |
+| Google Images (via the Serper API) | Specific products, news events, people, Chinese-language subjects | Unknown rights | Yes | 2,500 free queries on sign-up, then paid top-ups |
+| Wikimedia Commons | Landmarks, architecture, history, science, organisations | CC0, CC BY, CC BY-SA, etc.; the exact licence of each image is recorded | No | Free |
+| Pixabay | Mood shots and generic scenes (office, city, nature) | Pixabay Content License: free to use, attribution optional | Yes | Free |
+| Official web pages (`site` mode) | A product's or company's own images | Owned by the site | No (Exa can fill in when a page can't be parsed) | Free |
+| Iconify icons (`icons` mode) | Illustrating concepts | Open-source icon sets (MIT, Apache 2.0, etc.) | No | Free |
 
-数据图表、流程图不在这个 skill 的范围里，SKILL.md 会让 Agent 自己画。
+Charts and diagrams are out of scope: SKILL.md tells the agent to draw those itself.
 
-## 安装
+## Installation
 
-### 1. 依赖
+### 1. Requirements
 
-- Python 3.9 或更新版本：`pip install -r requirements.txt`（requests、Pillow、beautifulsoup4、lxml）
-- 图标模式还需要 Node.js 和 sharp：`npm install -g sharp`。不用图标的话可以不装。
+- Python 3.9 or later: `pip install -r requirements.txt` (requests, Pillow, beautifulsoup4, lxml)
+- Icon mode also needs Node.js and sharp: `npm install -g sharp`. Skip this if you don't need icons.
 
-### 2. 放进 skill 目录
+### 2. Put it in your skills directory
 
-Claude Code：
+Claude Code:
 
 ```bash
 git clone https://github.com/Kishibe999/find-images.git ~/.claude/skills/find-images
 ```
 
-Codex 读取 `~/.codex/skills/`（新版也读 `~/.agents/skills/`）。两个都用时只克隆一份，另一边建一个目录链接，以后改一处就行：
+Codex reads `~/.codex/skills/` (newer versions also read `~/.agents/skills/`). If you use both, clone once and link the other location, so there is only one copy to update:
 
 ```powershell
-# Windows（PowerShell）
+# Windows (PowerShell)
 New-Item -ItemType Junction -Path "$HOME\.codex\skills\find-images" -Target "$HOME\.claude\skills\find-images"
 ```
 
@@ -68,82 +71,83 @@ New-Item -ItemType Junction -Path "$HOME\.codex\skills\find-images" -Target "$HO
 ln -s ~/.claude/skills/find-images ~/.codex/skills/find-images
 ```
 
-装好后重开会话，Agent 的 skill 列表里应该能看到 `find-images`。
+Start a new session afterwards; `find-images` should appear in the agent's skill list.
 
-### 3. 配置 key
+### 3. Set up keys
 
-把 [keys.env.example](keys.env.example) 复制到 `~/.config/image-search/keys.env`，填上 key。也可以改用同名的环境变量。不要把 key 放进 skill 目录，免得被提交到 git。
+Copy [keys.env.example](keys.env.example) to `~/.config/image-search/keys.env` and fill in your keys, or set environment variables with the same names. Keep keys out of the skill directory so they never get committed.
 
-缺哪个 key，脚本就跳过对应图源，其他图源照常用。
+If a key is missing, the script skips that source and uses the others.
 
-**Serper（Google 图片）**
-- 注册：在 [serper.dev](https://serper.dev) 注册账号，登录后在后台的 API Key 页面复制 key。注册送 2,500 次查询，不用绑卡。
-- 扣费：每次图片搜索，要 10 条结果扣 1 次，要 20 条扣 2 次。脚本在拼板张数 `n` 大于 6 时要 20 条。所以送的 2,500 次额度能搜 1,250 到 2,500 次。
-- 用完以后要充值，没有每月免费额度。档位：$50 买 5 万次（每千次 $1），$375 买 50 万次，$1,250 买 250 万次。充值的额度 6 个月后过期。
-- 付款经 Paddle，支持 Visa、Mastercard、American Express、Discover 和 PayPal。
+**Serper (Google Images)**
+- Sign up at [serper.dev](https://serper.dev) and copy the key from the API Key page of the dashboard. You get 2,500 free queries on sign-up; no card needed.
+- Cost per search: 10 results cost 1 query, 20 results cost 2. The script asks for 20 when the sheet size `n` is above 6, so the free 2,500 queries cover 1,250 to 2,500 searches.
+- After that you top up; there is no monthly free allowance. Tiers: $50 for 50,000 queries ($1 per 1,000), $375 for 500,000, $1,250 for 2.5 million. Top-ups expire after 6 months.
+- Payment goes through Paddle: Visa, Mastercard, American Express, Discover or PayPal.
 
 **Pixabay**
-- 注册：在 [pixabay.com](https://pixabay.com) 注册账号，登录后打开 [pixabay.com/api/docs](https://pixabay.com/api/docs/)，参数表里 `key` 那一行显示的就是你的 key。
-- 免费，每分钟最多 100 次请求。
-- 免费接口给的图最大 1280px，更大的尺寸要向 Pixabay 申请完整 API 权限。
-- Pixabay 要求把图下载到本地使用，不能直接引用它的图片链接。脚本本来就会下载。
+- Create an account at [pixabay.com](https://pixabay.com), log in and open [pixabay.com/api/docs](https://pixabay.com/api/docs/); your key is shown in the `key` row of the parameter table.
+- Free, up to 100 requests per minute.
+- The free API serves images up to 1280px; larger sizes require applying to Pixabay for full API access.
+- Pixabay requires images to be downloaded rather than hotlinked. The script downloads them anyway.
 
-**Exa（可选）**
-- 只在 `site` 模式本地解析不到页面图片时用到，用来提取页面上的图片链接。
-- 注册：在 [dashboard.exa.ai](https://dashboard.exa.ai) 注册，在 API Keys 页面创建 key。每月有 $10 免费额度，这个用途按每千页 $1 计费。
+**Exa (optional)**
+- Only used in `site` mode when the script cannot find images on a page by itself; Exa then extracts the page's image links.
+- Sign up at [dashboard.exa.ai](https://dashboard.exa.ai) and create a key on the API Keys page. There is $10 of free credit per month; this use costs $1 per 1,000 pages.
 
-## 使用
+## Usage
 
-在 Claude Code 或 Codex 里直接提需求就行，比如"给这份 PPT 第 3、5、8 页配图""找一张港口滚装船的横图，要可商用"。Agent 会按 SKILL.md 写需求清单、搜索、看拼板、下载、生成来源页。
+Just ask in Claude Code or Codex, for example "find images for slides 3, 5 and 8 of this deck" or "find a landscape photo of a car carrier ship at port, free to use". The agent follows SKILL.md: it writes the image plan, searches, reviews the sheets, downloads the picks and builds the credits page.
 
-也可以手动运行脚本：
+You can also run the script by hand:
 
 ```bash
-python scripts/imgs.py search --plan examples/plan.json --out images    # 按清单批量搜索
-python scripts/imgs.py search --tag s03 --q-en "car carrier ship" --q "滚装船" --src commons,pixabay
+python scripts/imgs.py search --plan examples/plan.json --out images    # batch search from a plan
+python scripts/imgs.py search --tag s03 --q-en "car carrier ship" --src commons,pixabay
 python scripts/imgs.py site   --tag s05 --url https://www.example.com/product
 python scripts/imgs.py icons  --tag s07 --q battery --color "#1F4E79"
-python scripts/imgs.py pick   --tag s03 --ids 2,5                       # 下载拼板上的 2 号和 5 号
-python scripts/imgs.py credits                                          # 生成 credits.md
+python scripts/imgs.py pick   --tag s03 --ids 2,5                       # download #2 and #5 from the sheet
+python scripts/imgs.py credits                                          # write credits.md
 ```
 
-需求清单的写法见 [examples/plan.json](examples/plan.json) 和 [SKILL.md](SKILL.md)。在 Windows 的 Git Bash 里，中文命令行参数可能会变成乱码，这时把查询写进 plan.json（UTF-8）再运行。
+See [examples/plan.json](examples/plan.json) and [SKILL.md](SKILL.md) for the plan format. If non-ASCII arguments get garbled in your shell (Chinese in Git Bash on Windows, for example), put the queries in plan.json (UTF-8) instead.
 
-输出目录：
+Output layout:
 
 ```
 images/
-├── _work/<tag>/        候选图和拼板 sheet.jpg、candidates.json
-├── assets/             选中的图（<tag>_<编号>.jpg / .png，图标另有 .svg）
-├── manifest.json       每张图的文件路径、尺寸、来源页、作者、协议
-└── credits.md          图片来源页
+├── _work/<tag>/        candidates, sheet.jpg, candidates.json
+├── assets/             chosen images (<tag>_<id>.jpg / .png; icons also .svg)
+├── manifest.json       file path, size, source page, author and licence of each image
+└── credits.md          credits page
 ```
 
-## 授权说明
+## About licences
 
-- 授权等级是按图源提供的元数据判断的。Commons 以文件页上标注的协议为准。
-- 可商用：CC0、Pixabay、开源图标，怎么用都行。
-- 需署名：CC BY、CC BY-SA，来源页要写上作者和协议；CC BY-SA 的图改过以后，改后的版本也要用同样的协议。
-- 官网图片和版权未知的图，只适合内部汇报、课程作业、学术展示，并要注明来源。对外发布或商用前，请换成可商用的图或取得授权。
-- 脚本只负责记录来源，不做法律判断，重要场合请自己再核实一遍。
+- Licence classes come from the metadata each source provides. For Commons, the licence on the file page is authoritative.
+- Free to use: CC0, Pixabay, open-source icons. Any use is fine.
+- Attribution required: CC BY and CC BY-SA. Credit the author and licence on the sources slide; a modified CC BY-SA image must be shared under the same licence.
+- Official site images and images with unknown rights are for internal presentations, coursework and academic talks only, with the source cited. Replace them with free-to-use images or get permission before publishing or commercial use.
+- The script records sources; it does not give legal advice. Double-check anything that matters.
 
-## 为什么选这几个图源
+## Why these sources
 
-2026 年 11 月调研时的情况：
+As of November 2026:
 
-- Bing Image Search API 已在 2025 年 8 月停用。Google Custom Search JSON API 不再接受新用户，2027 年 1 月 1 日停止服务。要拿到 Google 图片结果，Serper 是注册就能用、不用绑卡的方案之一。
-- Brave Search API 也能搜图，但免费档也要绑信用卡，按每千次 $5 计费，所以没有用。
-- Pexels 暂停发放新的 API key；Openverse 测试时接口超时（HTTP 504）。
-- Wikimedia Commons 只能取标准宽度的缩略图（960、1280、1920、3840px），脚本下载时用 1920px。
+- The Bing Image Search API was retired in August 2025. The Google Custom Search JSON API no longer accepts new customers and shuts down on 1 January 2027. Serper is one of the few ways to get Google Images results that works right after sign-up without a card.
+- The Brave Search API can search images, but even its free tier requires a credit card, and it costs $5 per 1,000 queries, so it is not used.
+- Pexels has paused issuing new API keys, and the Openverse API timed out (HTTP 504) in testing.
+- Wikimedia Commons only serves standard thumbnail widths (960, 1280, 1920, 3840px); the script downloads the 1920px one.
 
-## 已知限制
+## Known limitations
 
-- Commons 和 Iconify 只认英文查询；Commons 用 2 到 4 个英文词效果最好。
-- Pixabay 免费接口最大 1280px，在 4K 屏上做全屏背景会略软。
-- 部分网站有防盗链，下载原图失败时会退回缩略图，脚本会提示换一张。
-- 访问 Wikimedia 时用通用的 User-Agent。如果被限流，可以把环境变量 `FIND_IMAGES_UA` 设成带你自己联系方式的 User-Agent。
-- 拼板上的中文标签需要系统里有中文字体（Windows、macOS 自带；Linux 要装 Noto Sans CJK 或文泉驿），也可以用 `FIND_IMAGES_FONT` 指定字体文件。
+- Commons and Iconify only understand English queries; 2 to 4 English words work best on Commons.
+- Pixabay's free API tops out at 1280px, which looks slightly soft as a full-screen background on a 4K screen.
+- Some sites block hotlinking. When the original can't be downloaded, pick falls back to the thumbnail and tells you to choose another image.
+- Requests to Wikimedia use a generic User-Agent. If you get rate-limited, set the environment variable `FIND_IMAGES_UA` to a User-Agent that includes your own contact details.
+- Chinese text on sheet labels needs a CJK font (bundled with Windows and macOS; on Linux install Noto Sans CJK or WenQuanYi). `FIND_IMAGES_FONT` can point to a font file.
+- The output language is detected from the system UI language; set `FIND_IMAGES_LANG=en` or `zh` if it guesses wrong.
 
 ## License
 
-代码使用 [MIT](LICENSE) 协议。搜到的图片版权归各自作者，请按 `manifest.json` 里记录的协议使用。
+The code is under the [MIT](LICENSE) licence. Images found with it belong to their authors; use them under the licence recorded in `manifest.json`.
