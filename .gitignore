@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+
+# keys belong in ~/.config/image-search/keys.env, never in the repo
+keys.env
+.env
+
+# output of test runs
+images/
+_work/

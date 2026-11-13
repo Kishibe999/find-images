@@ -1,0 +1,7 @@
+[
+ {"tag": "s01_cover", "q": "新能源汽车 出口 港口 滚装船", "q_en": "car carrier ship",
+  "src": "commons,pixabay", "orient": "landscape", "min_side": 1600, "n": 12},
+ {"tag": "s04_product", "q": "比亚迪 海豹07 官方图", "src": "web", "orient": "landscape", "min_side": 1200, "n": 9},
+ {"tag": "s05_official", "mode": "site", "url": "https://www.byd.com/cn/", "n": 9},
+ {"tag": "s07_icon", "mode": "icons", "q": "battery", "color": "#1F4E79", "n": 16}
+]
